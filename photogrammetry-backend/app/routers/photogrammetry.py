@@ -1,3 +1,5 @@
+import threading
+
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 
@@ -26,7 +28,13 @@ async def run_photogrammetry(request: RunRequest):
         request.job_id, status=JobStatus.RECONSTRUCTING, progress=0, stage="starting"
     )
 
-    # TODO: Wire to OpenSfM pipeline in PHOTO-06 (runs in background thread)
+    # Lazy import to avoid loading open3d on systems where it's not installed
+    from app.services.opensfm_pipeline import OpenSfMPipeline
+
+    pipeline = OpenSfMPipeline()
+    threading.Thread(
+        target=pipeline.run, args=(request.job_id,), daemon=True
+    ).start()
 
     return {
         "job_id": request.job_id,

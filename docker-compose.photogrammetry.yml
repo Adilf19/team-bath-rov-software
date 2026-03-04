@@ -1,0 +1,26 @@
+services:
+  photogrammetry-backend:
+    image: ghcr.io/team-bath-hydrobotics/photogrammetry-backend:latest
+    # To build locally instead: docker compose -f docker-compose.photogrammetry.yml build
+    build:
+      context: ./photogrammetry-backend
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+    volumes:
+      - photogrammetry-data:/app/data
+    environment:
+      - PORT=8100
+      - UPLOAD_DIR=/app/data/uploads
+      - OUTPUT_DIR=/app/data/outputs
+      - CORS_ORIGINS=["http://localhost:5173"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  photogrammetry-data:
