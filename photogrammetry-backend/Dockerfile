@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     python3-pip \
     python3-setuptools \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin to a known-good commit for reproducibility
@@ -27,15 +28,10 @@ RUN git clone --recurse-submodules https://github.com/mapillary/OpenSfM.git /opt
 
 WORKDIR /opt/OpenSfM
 
-# Install Python deps first
-RUN pip3 install --no-cache-dir scikit-build-core pybind11 numpy
-
-# Build with make (not ninja) and single job to avoid OOM
-RUN pip3 install --no-cache-dir \
-    --config-settings=cmake.define.CMAKE_BUILD_TYPE=Release \
-    --config-settings=cmake.args=-DCMAKE_JOB_POOLS:STRING="compile=1;link=1" \
-    --config-settings=build-dir=/tmp/osfm-build \
-    -v .
+# Upgrade pip so --config-settings works, then build
+RUN pip3 install --no-cache-dir --upgrade pip \
+    && pip3 install --no-cache-dir scikit-build-core pybind11 numpy \
+    && pip3 install --no-cache-dir .
 
 # ============================================================
 # Stage 2: Runtime
