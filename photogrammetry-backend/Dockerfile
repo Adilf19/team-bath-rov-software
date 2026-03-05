@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     ninja-build \
     git \
+    ca-certificates \
     libboost-program-options-dev \
     libboost-filesystem-dev \
     libboost-graph-dev \
