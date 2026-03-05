@@ -107,12 +107,16 @@ class OpenSfMPipeline:
                 logger.info("Completed stage %s for job %s", stage_name, job_id)
 
             # Find the exported PLY file
-            ply_path = project_dir / "undistorted" / "reconstruction.ply"
+            ply_path = project_dir / "reconstruction.ply"
             if not ply_path.exists():
-                # Some versions export to a different location
-                depthmaps_ply = project_dir / "undistorted" / "depthmaps" / "merged.ply"
-                if depthmaps_ply.exists():
-                    ply_path = depthmaps_ply
+                # Fallback locations for different OpenSfM versions
+                for alt in [
+                    project_dir / "undistorted" / "reconstruction.ply",
+                    project_dir / "undistorted" / "depthmaps" / "merged.ply",
+                ]:
+                    if alt.exists():
+                        ply_path = alt
+                        break
                 else:
                     job_manager.update_job(
                         job_id,
