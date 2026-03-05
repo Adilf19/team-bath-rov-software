@@ -20,18 +20,24 @@ matching_gps_distance: 0
 matching_gps_neighbors: 0
 use_altitude_tag: false
 align_method: naive
+depthmap_method: patch_match_sample
+depthmap_resolution: 640
+depthmap_min_patch_sd: 1.0
 """
 
+# Dense reconstruction pipeline: sparse SfM → undistort → depthmaps → dense PLY
 STAGES = [
-    ("extract_metadata", 0, 10),
-    ("detect_features", 10, 25),
-    ("match_features", 25, 45),
-    ("create_tracks", 45, 50),
-    ("reconstruct", 50, 75),
-    ("export_ply", 75, 85),
+    ("extract_metadata", 0, 5),
+    ("detect_features", 5, 20),
+    ("match_features", 20, 40),
+    ("create_tracks", 40, 42),
+    ("reconstruct", 42, 55),
+    ("undistort", 55, 60),
+    ("compute_depthmaps", 60, 80),
+    ("export_ply", 80, 85),
 ]
 
-STAGE_TIMEOUT = 600  # 10 minutes per stage
+STAGE_TIMEOUT = 1200  # 20 minutes per stage (depthmaps can be slow)
 
 
 class OpenSfMPipeline:
@@ -82,8 +88,13 @@ class OpenSfMPipeline:
                     stage=stage_name,
                 )
 
+                cmd = [OPENSFM_BIN, stage_name, str(project_dir)]
+                # export_ply with --depthmaps flag to export dense point cloud
+                if stage_name == "export_ply":
+                    cmd = [OPENSFM_BIN, stage_name, "--depthmaps", str(project_dir)]
+
                 result = subprocess.run(
-                    [OPENSFM_BIN, stage_name, str(project_dir)],
+                    cmd,
                     capture_output=True,
                     text=True,
                     timeout=STAGE_TIMEOUT,
@@ -106,24 +117,26 @@ class OpenSfMPipeline:
                 job_manager.update_job(job_id, progress=end_pct)
                 logger.info("Completed stage %s for job %s", stage_name, job_id)
 
-            # Find the exported PLY file
-            ply_path = project_dir / "reconstruction.ply"
-            if not ply_path.exists():
-                # Fallback locations for different OpenSfM versions
-                for alt in [
-                    project_dir / "undistorted" / "reconstruction.ply",
-                    project_dir / "undistorted" / "depthmaps" / "merged.ply",
-                ]:
-                    if alt.exists():
-                        ply_path = alt
-                        break
-                else:
-                    job_manager.update_job(
-                        job_id,
-                        status=JobStatus.ERROR,
-                        error="Reconstruction completed but no PLY file was produced",
-                    )
-                    return
+            # Find the dense PLY file (prefer dense depthmap merge over sparse)
+            ply_candidates = [
+                project_dir / "undistorted" / "depthmaps" / "merged.ply",
+                project_dir / "undistorted" / "reconstruction.ply",
+                project_dir / "reconstruction.ply",
+            ]
+            ply_path = None
+            for candidate in ply_candidates:
+                if candidate.exists():
+                    ply_path = candidate
+                    logger.info("Using PLY: %s", ply_path)
+                    break
+
+            if ply_path is None:
+                job_manager.update_job(
+                    job_id,
+                    status=JobStatus.ERROR,
+                    error="Reconstruction completed but no PLY file was produced",
+                )
+                return
 
             # Mesh processing
             output_path = self.mesh_processor.process(job_id, ply_path)
@@ -143,7 +156,7 @@ class OpenSfMPipeline:
             job_manager.update_job(
                 job_id,
                 status=JobStatus.ERROR,
-                error="Reconstruction timed out (stage exceeded 10 minutes)",
+                error="Reconstruction timed out (stage exceeded 20 minutes)",
             )
         except Exception:
             logger.exception("Pipeline failed for job %s", job_id)
