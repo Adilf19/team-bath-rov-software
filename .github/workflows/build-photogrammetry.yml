@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "photogrammetry-backend/Dockerfile"
+      - "photogrammetry-backend/**"
 
 env:
   REGISTRY: ghcr.io
