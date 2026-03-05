@@ -51,21 +51,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    libboost-program-options1.74.0 \
-    libboost-filesystem1.74.0 \
-    libboost-graph1.74.0 \
-    libboost-system1.74.0 \
-    libflann1.9 \
-    libfreeimage3 \
-    libmetis5 \
-    libgoogle-glog0v5 \
-    libgflags2.2 \
-    libsqlite3-0 \
-    libceres2 \
-    libglew2.2 \
-    libqt5core5a \
-    libqt5opengl5 \
-    libcgal13 \
+    libboost-program-options-dev \
+    libboost-filesystem-dev \
+    libboost-graph-dev \
+    libboost-system-dev \
+    libflann-dev \
+    libfreeimage-dev \
+    libmetis-dev \
+    libgoogle-glog-dev \
+    libgflags-dev \
+    libsqlite3-dev \
+    libceres-dev \
+    libglew-dev \
+    qtbase5-dev \
+    libqt5opengl5-dev \
+    libcgal-dev \
     libgl1-mesa-glx \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
