@@ -2,8 +2,7 @@
 # Test the photogrammetry pipeline using coral reef images from HuggingFace
 # Usage: ./scripts/test_coral_pipeline.sh [num_images]
 #
-# Downloads images directly into the Docker container (no local storage needed)
-# then runs the full reconstruction pipeline.
+# Downloads images to a temp dir, uploads via API, then runs reconstruction.
 
 set -e
 
@@ -11,6 +10,7 @@ NUM_IMAGES=${1:-15}
 BASE_URL="https://huggingface.co/datasets/wildflow/sweet-corals/resolve/main/indonesia_pemuteran_p1_20250213/raw/B1_Left"
 API="http://localhost:8100"
 START_INDEX=7546
+TMP_DIR=$(mktemp -d)
 
 echo "=== Coral Reef Pipeline Test ==="
 echo "Images: $NUM_IMAGES"
@@ -27,31 +27,31 @@ fi
 JOB=$(curl -s -X POST "$API/api/jobs" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
 echo "Created job: $JOB"
 
-# Download images directly into the container
-echo "Downloading $NUM_IMAGES images into container..."
+# Download images to temp dir
+echo "Downloading $NUM_IMAGES images..."
 END_INDEX=$((START_INDEX + NUM_IMAGES - 1))
-docker exec team-bath-rov-software-photogrammetry-backend-1 bash -c "
-mkdir -p /app/data/uploads/$JOB
-cd /app/data/uploads/$JOB
-for i in \$(seq $START_INDEX $END_INDEX); do
-    printf 'Downloading GPAA%s.JPG... ' \$i
-    curl -sL -o GPAA\${i}.JPG '$BASE_URL/GPAA'\${i}'.JPG'
-    echo 'done'
+for i in $(seq $START_INDEX $END_INDEX); do
+    printf "  GPAA%s.JPG... " "$i"
+    curl -sL -o "$TMP_DIR/GPAA${i}.JPG" "${BASE_URL}/GPAA${i}.JPG"
+    echo "done ($(du -h "$TMP_DIR/GPAA${i}.JPG" | cut -f1))"
 done
-echo ''
-echo \"Downloaded \$(ls *.JPG | wc -l) images (\$(du -sh . | cut -f1))\"
-"
+echo "Downloaded $NUM_IMAGES images ($(du -sh "$TMP_DIR" | cut -f1) total)"
+echo ""
 
-# Update job status so pipeline knows images are ready
-docker exec team-bath-rov-software-photogrammetry-backend-1 python3 -c "
-from app.services.job_manager import job_manager
-from app.models.job import JobStatus
-job_manager.update_job('$JOB', status=JobStatus.PENDING)
-print('Job status set to PENDING')
-"
+# Upload via API
+echo "Uploading to server..."
+UPLOAD_ARGS="-F job_id=$JOB"
+for f in "$TMP_DIR"/*.JPG; do
+    UPLOAD_ARGS="$UPLOAD_ARGS -F files=@$f"
+done
+UPLOAD_RESULT=$(eval curl -s -X POST "$API/api/upload" $UPLOAD_ARGS)
+echo "$UPLOAD_RESULT" | python3 -m json.tool
+echo ""
+
+# Clean up temp files
+rm -rf "$TMP_DIR"
 
 # Start pipeline
-echo ""
 echo "Starting reconstruction pipeline..."
 curl -s -X POST "$API/api/photogrammetry/run" \
     -H "Content-Type: application/json" \
