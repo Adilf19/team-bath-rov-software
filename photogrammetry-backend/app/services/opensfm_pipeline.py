@@ -1,5 +1,4 @@
 import logging
-import os
 import shutil
 import subprocess
 import tempfile
@@ -12,40 +11,47 @@ from app.services.mesh_processor import MeshProcessor
 
 logger = logging.getLogger(__name__)
 
-OPENSFM_BIN = shutil.which("opensfm") or "/opt/OpenSfM/bin/opensfm"
+COLMAP_BIN = shutil.which("colmap") or "/usr/bin/colmap"
 
-OPENSFM_CONFIG = """\
-feature_type: SIFT
-matching_gps_distance: 0
-matching_gps_neighbors: 0
-use_altitude_tag: false
-align_method: naive
-depthmap_method: patch_match_sample
-depthmap_resolution: 640
-depthmap_min_patch_sd: 1.0
-"""
-
-# Dense reconstruction pipeline: sparse SfM → undistort → depthmaps → dense PLY
-STAGES = [
-    ("extract_metadata", 0, 5),
-    ("detect_features", 5, 20),
-    ("match_features", 20, 40),
-    ("create_tracks", 40, 42),
-    ("reconstruct", 42, 55),
-    ("undistort", 55, 60),
-    ("compute_depthmaps", 60, 80),
-    ("export_ply", 80, 85),
-]
-
-STAGE_TIMEOUT = 1200  # 20 minutes per stage (depthmaps can be slow)
+STAGE_TIMEOUT = 1200  # 20 minutes per stage
 
 
 class OpenSfMPipeline:
+    """Photogrammetry pipeline using COLMAP for SfM reconstruction."""
+
     def __init__(self) -> None:
         self.mesh_processor = MeshProcessor()
 
+    def _run_colmap(self, args: list[str], job_id: str, stage_name: str) -> bool:
+        """Run a COLMAP command. Returns True on success."""
+        cmd = [COLMAP_BIN] + args
+        logger.info("Running: %s", " ".join(cmd))
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=STAGE_TIMEOUT,
+        )
+
+        if result.returncode != 0:
+            logger.error(
+                "COLMAP %s failed for job %s:\nstdout: %s\nstderr: %s",
+                stage_name,
+                job_id,
+                result.stdout[-500:] if result.stdout else "",
+                result.stderr[-500:] if result.stderr else "",
+            )
+            job_manager.update_job(
+                job_id,
+                status=JobStatus.ERROR,
+                error=f"Reconstruction failed at '{stage_name}': {(result.stderr or result.stdout or 'unknown error')[:500]}",
+            )
+            return False
+        return True
+
     def run(self, job_id: str) -> None:
-        """Run the full OpenSfM pipeline. Intended to be called in a background thread."""
+        """Run the full COLMAP pipeline. Intended to be called in a background thread."""
         tmp_dir = None
         try:
             upload_dir = settings.UPLOAD_DIR / job_id
@@ -59,78 +65,87 @@ class OpenSfMPipeline:
                 )
                 return
 
-            # Set up OpenSfM project in a temp directory
-            tmp_dir = Path(tempfile.mkdtemp(prefix=f"opensfm_{job_id}_"))
-            project_dir = tmp_dir / "project"
-            project_dir.mkdir()
+            # Set up workspace
+            tmp_dir = Path(tempfile.mkdtemp(prefix=f"colmap_{job_id}_"))
+            db_path = tmp_dir / "database.db"
+            sparse_dir = tmp_dir / "sparse"
+            sparse_dir.mkdir()
 
-            # Create images directory with symlinks
-            images_dir = project_dir / "images"
-            images_dir.mkdir()
-            for img in images:
-                (images_dir / img.name).symlink_to(img.resolve())
-
-            # Write config
-            (project_dir / "config.yaml").write_text(OPENSFM_CONFIG)
+            image_dir = settings.UPLOAD_DIR / job_id
 
             logger.info(
-                "Running OpenSfM pipeline for job %s with %d images",
+                "Running COLMAP pipeline for job %s with %d images",
                 job_id,
                 len(images),
             )
 
-            # Run each stage
-            for stage_name, start_pct, end_pct in STAGES:
+            # Stage 1: Feature extraction (0-20%)
+            job_manager.update_job(
+                job_id,
+                status=JobStatus.RECONSTRUCTING,
+                progress=0,
+                stage="feature_extraction",
+            )
+            if not self._run_colmap([
+                "feature_extractor",
+                "--database_path", str(db_path),
+                "--image_path", str(image_dir),
+                "--ImageReader.single_camera", "1",
+                "--SiftExtraction.use_gpu", "0",
+                "--SiftExtraction.max_num_features", "8192",
+            ], job_id, "feature_extraction"):
+                return
+            job_manager.update_job(job_id, progress=20)
+            logger.info("Completed feature_extraction for job %s", job_id)
+
+            # Stage 2: Feature matching (20-45%)
+            job_manager.update_job(job_id, progress=20, stage="feature_matching")
+            if not self._run_colmap([
+                "exhaustive_matcher",
+                "--database_path", str(db_path),
+                "--SiftMatching.use_gpu", "0",
+            ], job_id, "feature_matching"):
+                return
+            job_manager.update_job(job_id, progress=45)
+            logger.info("Completed feature_matching for job %s", job_id)
+
+            # Stage 3: Sparse reconstruction / mapping (45-75%)
+            job_manager.update_job(job_id, progress=45, stage="reconstruction")
+            if not self._run_colmap([
+                "mapper",
+                "--database_path", str(db_path),
+                "--image_path", str(image_dir),
+                "--output_path", str(sparse_dir),
+            ], job_id, "reconstruction"):
+                return
+            job_manager.update_job(job_id, progress=75)
+            logger.info("Completed reconstruction for job %s", job_id)
+
+            # Find the best reconstruction (COLMAP creates numbered subdirs: 0, 1, ...)
+            sparse_models = sorted(sparse_dir.iterdir())
+            if not sparse_models:
                 job_manager.update_job(
                     job_id,
-                    status=JobStatus.RECONSTRUCTING,
-                    progress=start_pct,
-                    stage=stage_name,
+                    status=JobStatus.ERROR,
+                    error="Sparse reconstruction produced no models",
                 )
+                return
+            sparse_model = sparse_models[0]
 
-                cmd = [OPENSFM_BIN, stage_name, str(project_dir)]
-                # export_ply with --depthmaps flag to export dense point cloud
-                if stage_name == "export_ply":
-                    cmd = [OPENSFM_BIN, stage_name, "--depthmaps", str(project_dir)]
+            # Stage 4: Export to PLY (75-85%)
+            job_manager.update_job(job_id, progress=75, stage="export_ply")
+            ply_path = tmp_dir / "reconstruction.ply"
+            if not self._run_colmap([
+                "model_converter",
+                "--input_path", str(sparse_model),
+                "--output_path", str(ply_path),
+                "--output_type", "PLY",
+            ], job_id, "export_ply"):
+                return
+            job_manager.update_job(job_id, progress=85)
+            logger.info("Completed export_ply for job %s", job_id)
 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=STAGE_TIMEOUT,
-                )
-
-                if result.returncode != 0:
-                    logger.error(
-                        "OpenSfM %s failed for job %s: %s",
-                        stage_name,
-                        job_id,
-                        result.stderr,
-                    )
-                    job_manager.update_job(
-                        job_id,
-                        status=JobStatus.ERROR,
-                        error=f"Reconstruction failed at stage '{stage_name}': {result.stderr[:500]}",
-                    )
-                    return
-
-                job_manager.update_job(job_id, progress=end_pct)
-                logger.info("Completed stage %s for job %s", stage_name, job_id)
-
-            # Find the dense PLY file (prefer dense depthmap merge over sparse)
-            ply_candidates = [
-                project_dir / "undistorted" / "depthmaps" / "merged.ply",
-                project_dir / "undistorted" / "reconstruction.ply",
-                project_dir / "reconstruction.ply",
-            ]
-            ply_path = None
-            for candidate in ply_candidates:
-                if candidate.exists():
-                    ply_path = candidate
-                    logger.info("Using PLY: %s", ply_path)
-                    break
-
-            if ply_path is None:
+            if not ply_path.exists():
                 job_manager.update_job(
                     job_id,
                     status=JobStatus.ERROR,
@@ -138,7 +153,10 @@ class OpenSfMPipeline:
                 )
                 return
 
-            # Mesh processing
+            ply_size = ply_path.stat().st_size
+            logger.info("PLY file size: %.1f MB", ply_size / (1024 * 1024))
+
+            # Stage 5: Mesh processing (85-100%)
             output_path = self.mesh_processor.process(job_id, ply_path)
 
             output_url = f"/api/jobs/{job_id}/model"
