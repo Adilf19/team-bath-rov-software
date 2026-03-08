@@ -16,7 +16,7 @@ COLMAP_BIN = shutil.which("colmap") or "/usr/bin/colmap"
 STAGE_TIMEOUT = 1200  # 20 minutes per stage
 
 
-class OpenSfMPipeline:
+class ColmapPipeline:
     """Photogrammetry pipeline using COLMAP for SfM reconstruction."""
 
     def __init__(self) -> None:
@@ -91,8 +91,12 @@ class OpenSfMPipeline:
                 "--database_path", str(db_path),
                 "--image_path", str(image_dir),
                 "--ImageReader.single_camera", "1",
+                "--ImageReader.camera_model", "SIMPLE_RADIAL",
                 "--SiftExtraction.use_gpu", "0",
-                "--SiftExtraction.max_num_features", "8192",
+                "--SiftExtraction.max_num_features", "5000",
+                "--SiftExtraction.max_image_size", "2000",
+                "--SiftExtraction.first_octave", "0",
+                "--SiftExtraction.num_threads", "1",
             ], job_id, "feature_extraction"):
                 return
             job_manager.update_job(job_id, progress=20)
@@ -104,6 +108,7 @@ class OpenSfMPipeline:
                 "exhaustive_matcher",
                 "--database_path", str(db_path),
                 "--SiftMatching.use_gpu", "0",
+                "--SiftMatching.num_threads", "1",
             ], job_id, "feature_matching"):
                 return
             job_manager.update_job(job_id, progress=45)

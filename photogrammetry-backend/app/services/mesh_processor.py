@@ -30,15 +30,26 @@ class MeshProcessor:
 
         logger.info("Loaded %d points from %s", len(pcd.points), ply_path)
 
-        # Estimate and orient normals
+        # Statistical outlier removal to clean noisy points
+        pcd, _ = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+        logger.info("After outlier removal: %d points", len(pcd.points))
+
+        # Downsample if too many points (memory safety for 8GB machines)
+        if len(pcd.points) > 50000:
+            voxel_size = 0.01
+            pcd = pcd.voxel_down_sample(voxel_size)
+            logger.info("Downsampled to %d points", len(pcd.points))
+
+        # Estimate normals
         pcd.estimate_normals(
             search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30)
         )
         pcd.orient_normals_consistent_tangent_plane(k=15)
 
         # Poisson surface reconstruction
+        depth = 8 if len(pcd.points) < 5000 else 9
         mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-            pcd, depth=9
+            pcd, depth=depth
         )
 
         # Remove low-density vertices (bottom 1st percentile) to trim noise

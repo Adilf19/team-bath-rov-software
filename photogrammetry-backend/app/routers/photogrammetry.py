@@ -29,9 +29,9 @@ async def run_photogrammetry(request: RunRequest):
     )
 
     # Lazy import to avoid loading open3d on systems where it's not installed
-    from app.services.opensfm_pipeline import OpenSfMPipeline
+    from app.services.colmap_pipeline import ColmapPipeline
 
-    pipeline = OpenSfMPipeline()
+    pipeline = ColmapPipeline()
     threading.Thread(
         target=pipeline.run, args=(request.job_id,), daemon=True
     ).start()

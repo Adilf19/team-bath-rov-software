@@ -32,8 +32,13 @@ echo "Downloading $NUM_IMAGES images..."
 END_INDEX=$((START_INDEX + NUM_IMAGES - 1))
 for i in $(seq $START_INDEX $END_INDEX); do
     printf "  GPAA%s.JPG... " "$i"
-    curl -sL -o "$TMP_DIR/GPAA${i}.JPG" "${BASE_URL}/GPAA${i}.JPG"
-    echo "done ($(du -h "$TMP_DIR/GPAA${i}.JPG" | cut -f1))"
+    curl -sL --max-time 30 -o "$TMP_DIR/GPAA${i}.JPG" "${BASE_URL}/GPAA${i}.JPG"
+    if [ -s "$TMP_DIR/GPAA${i}.JPG" ]; then
+        echo "done ($(du -h "$TMP_DIR/GPAA${i}.JPG" | cut -f1))"
+    else
+        echo "SKIPPED (download failed)"
+        rm -f "$TMP_DIR/GPAA${i}.JPG"
+    fi
 done
 echo "Downloaded $NUM_IMAGES images ($(du -sh "$TMP_DIR" | cut -f1) total)"
 echo ""
