@@ -75,7 +75,7 @@ print(f'{d[\"status\"]:15s} {d[\"progress\"]:3d}%  stage={d.get(\"stage\",\"-\")
     echo "$(date +%H:%M:%S) $STAGE"
 
     DONE=$(echo "$STATUS" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])" 2>/dev/null)
-    if [ "$DONE" = "COMPLETE" ]; then
+    if [ "$DONE" = "COMPLETE" ] || [ "$DONE" = "complete" ]; then
         echo ""
         echo "=== SUCCESS ==="
         echo "Download model: curl -o coral_model.glb $API/api/jobs/$JOB/model"

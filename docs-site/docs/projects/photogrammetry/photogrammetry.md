@@ -22,10 +22,10 @@ The whole thing runs inside a **Docker container** — a lightweight, isolated e
                      │                                          │
                      │  COLMAP Pipeline (background thread)     │
                      │    └── feature_extractor → matcher →     │
-                     │        mapper → model_converter (PLY)    │
+                     │        mapper → undistort                │
                      │                                          │
-                     │  Mesh Processor (Open3D + trimesh)       │
-                     │    └── point cloud → mesh → .glb         │
+                     │  OpenMVS Dense Pipeline                  │
+                     │    └── densify → mesh → texture → .glb   │
                      │                                          │
                      │  /app/data/                              │
                      │    ├── uploads/{job_id}/  (input images) │
@@ -81,7 +81,7 @@ docker compose -f docker-compose.photogrammetry.yml down
 
 ### Automated test with coral reef images
 
-The easiest way to test end-to-end. Downloads real underwater coral images from HuggingFace:
+The easiest way to test end-to-end. Downloads real underwater coral images from the [wildflow/sweet-corals](https://huggingface.co/datasets/wildflow/sweet-corals) HuggingFace dataset:
 
 ```bash
 # Run with 15 images (default)
@@ -161,12 +161,15 @@ The `progress` field (0-100) and `stage` field give finer-grained tracking:
 
 | Stage | Progress | What's happening |
 |-------|----------|------------------|
-| `feature_extraction` | 0-20% | COLMAP extracts SIFT features from each image |
-| `feature_matching` | 20-45% | Matches features between all image pairs |
-| `reconstruction` | 45-75% | Solves camera positions and builds sparse 3D point cloud |
-| `export_ply` | 75-85% | Converts sparse model to PLY point cloud |
-| `meshing` | 85-95% | Poisson surface reconstruction (point cloud → mesh) |
-| `exporting` | 95-100% | Exports final GLB file |
+| `feature_extraction` | 0-15% | COLMAP extracts SIFT features from each image |
+| `feature_matching` | 15-35% | Matches features between all image pairs |
+| `reconstruction` | 35-55% | Solves camera positions and builds sparse 3D point cloud |
+| `undistort` | 55-60% | Prepares images for dense matching |
+| `convert_to_mvs` | 60-62% | Converts COLMAP model to OpenMVS format |
+| `densify` | 62-80% | OpenMVS computes dense depth maps on CPU |
+| `reconstruct_mesh` | 80-90% | Creates mesh surface from dense points |
+| `texture_mesh` | 90-97% | Projects photos onto mesh for photorealistic texturing |
+| `exporting` | 97-100% | Exports final GLB file |
 | `complete` | 100% | Done — model is ready to download |
 
 ---
@@ -177,30 +180,35 @@ The `progress` field (0-100) and `stage` field give finer-grained tracking:
 
 COLMAP takes overlapping images and figures out where each camera was when the photo was taken, then builds a sparse 3D point cloud:
 
-1. **Feature Extraction** (`feature_extractor`) — finds distinctive SIFT keypoints in each image (up to 5000 per image, downscaled to max 2000px)
+1. **Feature Extraction** (`feature_extractor`) — finds distinctive SIFT keypoints in each image (up to 8192 per image, downscaled to max 3200px, using first_octave=-1 for finer detail)
 2. **Feature Matching** (`exhaustive_matcher`) — compares every pair of images to find matching keypoints. This is O(n²) so 20 images = 190 pairs
 3. **Sparse Reconstruction** (`mapper`) — uses the matches to solve for camera poses (position + orientation) and triangulate 3D points
-4. **PLY Export** (`model_converter`) — exports the sparse point cloud as a `.ply` file
 
 Each stage runs as a subprocess with a 20-minute timeout. GPU is disabled (`use_gpu=0`) because the Docker image is built CPU-only for broad compatibility.
 
-### 2. Mesh Processing (Open3D + trimesh)
+### 2. OpenMVS Dense Reconstruction
 
-The sparse point cloud is converted to a solid mesh:
+If OpenMVS is available in the Docker image (it is by default), the pipeline continues with dense reconstruction instead of using the sparse point cloud directly. This dramatically improves model quality — going from ~5k sparse points to hundreds of thousands of dense points with proper texture.
 
-1. **Load point cloud** — reads the PLY file, requires at least 100 points
+4. **Undistort Images** (`colmap image_undistorter`) — prepares images for dense matching
+5. **Convert to MVS** (`InterfaceCOLMAP`) — converts the COLMAP model to OpenMVS format
+6. **Densify Point Cloud** (`DensifyPointCloud`) — computes dense depth maps for each image on CPU, producing a much denser point cloud (resolution-level 2 for memory safety)
+7. **Reconstruct Mesh** (`ReconstructMesh`) — creates a mesh surface from the dense points
+8. **Texture Mesh** (`TextureMesh`) — projects the original photos onto the mesh surface for photorealistic texturing, exports to GLB
+
+### 3. Fallback: Sparse Mesh Processing (Open3D + trimesh)
+
+If OpenMVS is not available, the pipeline falls back to sparse-only meshing:
+
+1. **PLY Export** (`model_converter`) — exports the sparse point cloud as a `.ply` file
 2. **Outlier removal** — removes statistical outliers (noisy points)
-3. **Downsample** — if >50k points, voxel-downsamples for memory safety
+3. **Downsample** — if >200k points, voxel-downsamples for memory safety
 4. **Estimate normals** — calculates surface direction at each point using KDTree
-5. **Poisson reconstruction** — creates a watertight mesh surface (depth 8-9)
+5. **Poisson reconstruction** — creates a watertight mesh surface (depth 8-10 depending on point count)
 6. **Density trimming** — removes the bottom 1% low-density vertices (noise)
 7. **Export GLB** — saves as `.glb` via trimesh (viewable in any 3D viewer or browser)
 
-### Sparse vs Dense Reconstruction
-
-The current CPU-only pipeline produces a **sparse** point cloud (typically 1,000-5,000 points). This gives a recognizable but low-detail mesh.
-
-For much higher quality, COLMAP supports **dense reconstruction** (`patch_match_stereo`), which computes depth maps for every pixel, producing hundreds of thousands of points. However, this **requires an NVIDIA GPU with CUDA**. A Google Colab notebook for GPU-accelerated dense reconstruction is available at `scripts/colmap_dense_colab.ipynb`.
+A Google Colab notebook for GPU-accelerated dense reconstruction (using COLMAP's `patch_match_stereo` instead of OpenMVS) is also available at `scripts/colmap_dense_colab.ipynb`.
 
 ---
 
@@ -220,8 +228,8 @@ photogrammetry-backend/
 │   │   ├── manual_cad.py          # Manual CAD generation
 │   │   └── scaling.py             # Scale estimation
 │   └── services/
-│       ├── colmap_pipeline.py     # Runs COLMAP stages (SfM reconstruction)
-│       ├── mesh_processor.py      # Point cloud → mesh → GLB conversion
+│       ├── colmap_pipeline.py     # COLMAP SfM + OpenMVS dense reconstruction
+│       ├── mesh_processor.py      # Point cloud → mesh → GLB (sparse fallback)
 │       └── job_manager.py         # File-based job store with flock
 ├── scripts/
 │   ├── test_coral_pipeline.sh     # End-to-end test with coral reef images
@@ -258,8 +266,8 @@ Docker packages an application and all its dependencies into a **container** —
 
 The Dockerfile uses a **multi-stage build**:
 
-1. **Builder stage** (Ubuntu 22.04) — installs build dependencies (cmake, Boost, Eigen, Ceres, etc.), clones COLMAP 3.9.1 from source, and compiles it with CPU-only flags (`-DCUDA_ENABLED=OFF`, `-DGUI_ENABLED=OFF`)
-2. **Runtime stage** (Ubuntu 22.04) — installs only runtime libraries, copies the compiled COLMAP binary from the builder, installs Python deps, copies the app
+1. **Builder stage** (Ubuntu 22.04) — installs build dependencies (cmake, Boost, Eigen, Ceres, OpenCV, etc.), then compiles both **COLMAP 3.9.1** (CPU-only, `-DCUDA_ENABLED=OFF`) and **OpenMVS v2.3.0** (CPU-only, `-DOpenMVS_USE_CUDA=OFF`) from source
+2. **Runtime stage** (Ubuntu 22.04) — installs only runtime libraries, copies the compiled COLMAP and OpenMVS binaries from the builder, installs Python deps, copies the app
 
 The image is built in the cloud via **GitHub Actions** because compiling COLMAP from source needs significant RAM and time (~1 hour for multi-arch). The image supports both `linux/amd64` and `linux/arm64`.
 
