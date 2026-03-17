@@ -42,3 +42,47 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  smoke-test:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Verify COLMAP binary
+        run: docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} colmap help
+
+      - name: Verify OpenMVS TextureMesh binary
+        run: docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} /usr/local/bin/OpenMVS/TextureMesh --help
+
+      - name: Verify OpenMVS DensifyPointCloud binary
+        run: docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} /usr/local/bin/OpenMVS/DensifyPointCloud --help
+
+      - name: Verify OpenMVS ReconstructMesh binary
+        run: docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} /usr/local/bin/OpenMVS/ReconstructMesh --help
+
+      - name: Verify API starts
+        run: |
+          docker run -d --name photogrammetry-test -p 8100:8100 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          for i in $(seq 1 15); do
+            if curl -s --max-time 2 http://localhost:8100/api/health | grep -q ok; then
+              echo "API healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API failed to start"
+          docker logs photogrammetry-test
+          exit 1

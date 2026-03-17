@@ -2,9 +2,19 @@
 
 ## What is this?
 
-This is a FastAPI microservice that turns a set of overlapping photos into a 3D model (`.glb` file). It uses [COLMAP](https://colmap.github.io/) (Structure from Motion) to reconstruct 3D geometry from images, then converts the sparse point cloud into a mesh using Poisson surface reconstruction via Open3D.
+This is a FastAPI microservice for **MATE 2026 Task 1.2** (Coral Garden Ridge Modelling) that turns a set of overlapping photos into a 3D model (`.glb` file). It uses [COLMAP](https://colmap.github.io/) (Structure from Motion) for sparse reconstruction and [OpenMVS](https://github.com/cdcseacave/openMVS) for dense reconstruction, producing high-quality meshes with hundreds of thousands of points.
 
-The whole thing runs inside a **Docker container** — a lightweight, isolated environment that packages the app along with COLMAP (compiled from source, CPU-only) and all Python dependencies. This means you don't need to install anything on your machine except Docker.
+The whole thing runs inside a **Docker container** — a lightweight, isolated environment that packages the app along with COLMAP and OpenMVS (both compiled from source, CPU-only) and all Python dependencies. This means you don't need to install anything on your machine except Docker.
+
+### Competition Context
+
+The coral garden is a PVC structure (1-2.5 m long, ~36 cm wide, unknown height) with eight 10 cm x 10 cm colored target squares. The scoring flow:
+
+1. **Pilot measures length** with ROV tools → reports to judge → **judge gives TRUE length** (10 pts if within 5 cm)
+2. **3D model** generated from photos → scored by target visibility (5-20 pts)
+3. **True length entered** → model is scaled → **height estimated** digitally (5 pts for scaling + 5 pts if height within 5 cm)
+
+Option A (photogrammetry): up to **40 pts**. Option B (manual CAD with physical measurements): up to **30 pts**. Teams can attempt both and take the higher score. See the [Pilot Operations Guide](pilot-operations-guide.md) for the full competition procedure.
 
 ---
 
@@ -180,7 +190,7 @@ The `progress` field (0-100) and `stage` field give finer-grained tracking:
 
 COLMAP takes overlapping images and figures out where each camera was when the photo was taken, then builds a sparse 3D point cloud:
 
-1. **Feature Extraction** (`feature_extractor`) — finds distinctive SIFT keypoints in each image (up to 8192 per image, downscaled to max 3200px, using first_octave=-1 for finer detail)
+1. **Feature Extraction** (`feature_extractor`) — finds distinctive SIFT keypoints in each image (up to 8192 per image, downscaled to max 2400px, first_octave=0 for memory safety on 8GB machines)
 2. **Feature Matching** (`exhaustive_matcher`) — compares every pair of images to find matching keypoints. This is O(n²) so 20 images = 190 pairs
 3. **Sparse Reconstruction** (`mapper`) — uses the matches to solve for camera poses (position + orientation) and triangulate 3D points
 
@@ -321,6 +331,87 @@ You can also trigger a build manually:
 
 ---
 
+## Competition Deployment
+
+### What happens when you click "Generate Model"
+
+The frontend makes three API calls in sequence:
+
+1. **`POST /api/jobs`** — creates a job with a UUID
+2. **`POST /api/upload`** — uploads the images as multipart form data
+3. **`POST /api/photogrammetry/run`** — triggers reconstruction
+
+The backend returns immediately and runs the heavy reconstruction pipeline in a **background thread** inside the same Docker container. No new containers are started, no cloud services are involved.
+
+The frontend then **polls every 2 seconds** (`GET /api/jobs/{id}`) to get the progress percentage and stage name, updating the progress bar in real time. When the job reaches `complete`, it fetches the GLB model from `/api/jobs/{id}/model` and displays it in the 3D viewer.
+
+### How long will it take?
+
+The pipeline is **CPU-only** (no GPU). Approximate times on a typical laptop:
+
+| Images | Time |
+|--------|------|
+| 10-20 | ~5-15 minutes |
+| 50+ | 30-60+ minutes |
+
+Feature matching is the bottleneck — it compares every pair of images (O(n²)), so 20 images = 190 pairs. Each stage has a 20-minute timeout to prevent hangs.
+
+### Getting it running at competition
+
+Everything runs on **one machine** — no cloud, no separate servers. The competition laptop needs:
+
+1. **Docker** installed and running
+2. **The Docker image** available (pulled from GHCR or pre-loaded)
+3. **The frontend** running (Vite dev server or built static files)
+
+#### If the venue has internet
+
+```bash
+# Pull the latest image and start the backend
+docker compose -f docker-compose.photogrammetry.yml up
+
+# In another terminal, start the frontend
+cd ../team-bath-rov-secondary-ui
+npm run dev
+```
+
+Docker will pull the pre-built image from `ghcr.io/team-bath-hydrobotics/photogrammetry-backend:latest` automatically.
+
+#### If the venue has no internet
+
+Pre-load the image before you go:
+
+```bash
+# On a machine with internet — save the image to a file
+docker pull ghcr.io/team-bath-hydrobotics/photogrammetry-backend:latest
+docker save ghcr.io/team-bath-hydrobotics/photogrammetry-backend:latest -o photogrammetry-backend.tar
+
+# Transfer photogrammetry-backend.tar to the competition laptop (USB stick, etc.)
+
+# On the competition laptop — load the image from file
+docker load -i photogrammetry-backend.tar
+
+# Then start normally
+docker compose -f docker-compose.photogrammetry.yml up
+```
+
+#### How the frontend finds the backend
+
+The frontend uses **relative URLs** (`/api/jobs`, `/api/upload`, etc.) with no hardcoded host. In development, Vite proxies `/api/*` requests to `http://localhost:8100` where the Docker container serves the backend. As long as both run on the same machine, it just works:
+
+- Frontend: `http://localhost:5173` (Vite dev server)
+- Backend: `http://localhost:8100` (Docker container)
+
+### Pre-competition checklist
+
+- [ ] Docker Desktop installed and running on the competition laptop
+- [ ] Image pulled or pre-loaded (`docker images` should show `ghcr.io/team-bath-hydrobotics/photogrammetry-backend`)
+- [ ] `node_modules` installed in the frontend repo (`npm install`)
+- [ ] Test the full flow: upload images, generate model, verify it displays
+- [ ] Verify the laptop has at least 8 GB RAM available for reconstruction
+
+---
+
 ## Troubleshooting
 
 ### "unauthorized" when pulling the image
@@ -344,6 +435,24 @@ If Docker becomes unresponsive (often from OOM during reconstruction):
 2. Kill lingering processes: `killall com.docker.backend com.docker.build com.docker.virtualization docker`
 3. If that's not enough: `rm -rf ~/Library/Containers/com.docker.docker/Data/vms/0/data` (this resets Docker's VM disk — containers/images will need to be re-pulled)
 4. Reopen Docker Desktop
+
+### TextureMesh fails on Apple Silicon Macs (no colored squares on model)
+
+OpenMVS's `TextureMesh` binary uses x86 SSE instructions that don't work properly under Docker's ARM emulation on Apple Silicon Macs. The logs will show:
+
+```
+warning: no SSE compatible CPU or OS detected
+```
+
+The pipeline gracefully falls back to an untextured mesh — you still get geometry (height estimation works), but the colored target squares won't be visible, meaning you'd score only 5 pts instead of up to 20 pts for model quality.
+
+**This only affects Apple Silicon Macs.** On an x86/Intel machine (which most competition laptops are), TextureMesh runs natively and textures work fine.
+
+**Workarounds:**
+
+- **Test on an Intel machine** — any x86 laptop or Linux server will run TextureMesh correctly
+- **CI pipeline test** — the GitHub Actions workflow runs on x86 (`ubuntu-latest`) and includes an integration test that verifies texture output
+- **Competition laptop** — confirm it's x86/Intel before the event. If it is, textures will work with no changes
 
 ### Pipeline fails at "feature_extraction" with memory warning
 COLMAP's SIFT extraction can use a lot of RAM. The pipeline is configured for 8GB machines with conservative settings (1 thread, 2000px max, first_octave=0). If you still get OOM, reduce `max_image_size` in `colmap_pipeline.py`.
