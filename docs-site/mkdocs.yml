@@ -14,5 +14,8 @@ nav:
       - Preprocessor: projects/preprocessor/preprocessor.md
       - Schema Registry: projects/schema-registry/schema-registry.md
       - UI: projects/ui/ui.md
+  - ADRS:
+      - 2026: 
+            - DB-ADR: adrs/2026/db-adr.md
   - Other:
       - "25-26 Team": other/25-26/team.md
