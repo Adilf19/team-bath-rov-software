@@ -10,7 +10,8 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.utils.dataset import SyntheticCrabDataset
-from src.utils.transforms import get_crab_transforms, get_bg_transforms, get_val_transforms
+from src.utils.transforms import get_crab_transforms, get_crab_color_transforms, get_bg_transforms, get_val_transforms
+from datasets import load_dataset
 
 def generate_split(dataset, output_dir, split_name):
     """
@@ -47,8 +48,6 @@ def generate_split(dataset, output_dir, split_name):
 def main():
     parser = argparse.ArgumentParser(description="Generate synthetic crab data")
     parser.add_argument('--samples', type=int, default=100, help='Total number of samples to generate')
-    parser.add_argument('--bg_dir', type=str, default='backgrounds', help='Directory with background images')
-    parser.add_argument('--bg_subset', type=int, default=None, help='Maximum number of background images to load from bg_dir (useful for large datasets like BG-20k)')
     parser.add_argument('--src_dir', type=str, default='source_images', help='Directory with source crab images')
     parser.add_argument('--output', type=str, default='dataset', help='Output directory')
     args = parser.parse_args()
@@ -89,28 +88,8 @@ def main():
         return
 
     # 2. Setup Backgrounds
-    if not os.path.exists(args.bg_dir):
-        print(f"Error: Background directory {args.bg_dir} not found.")
-        # Create directory automatically
-        os.makedirs(args.bg_dir, exist_ok=True)
-        print(f"Created {args.bg_dir}. Please add images.")
-        return
-        
-    bg_files = []
-    for root, _, files in os.walk(args.bg_dir):
-        for f in files:
-            if f.lower().endswith(allowed_exts):
-                bg_files.append(os.path.join(root, f))
-                
-    if not bg_files:
-        print(f"Error: No images found in {args.bg_dir}.")
-        return
-
-    # Handle dataset subset if requested
-    if args.bg_subset is not None and args.bg_subset < len(bg_files):
-        print(f"Randomly selecting a subset of {args.bg_subset} backgrounds from {len(bg_files)} available.")
-        np.random.shuffle(bg_files)
-        bg_files = bg_files[:args.bg_subset]
+    print("Loading streaming background dataset from Hugging Face: unography/BG-20k-1200px")
+    hf_dataset = load_dataset("unography/BG-20k-1200px", split="train", streaming=True)
 
     # 3. Splits
     # 70% Train, 20% Val, 10% Test
@@ -121,31 +100,37 @@ def main():
     # 4. Generate
     # Train
     train_ds = SyntheticCrabDataset(
-        background_files=bg_files,
+        hf_dataset=hf_dataset,
         crab_images=crab_images,
         num_samples=n_train,
         crab_transform=get_crab_transforms(),
-        bg_transform=get_bg_transforms(640, 640)
+        crab_color_transform=get_crab_color_transforms(),
+        bg_transform=get_bg_transforms(640, 640),
+        bg_size=(640, 640)
     )
     generate_split(train_ds, args.output, 'train')
     
     # Val (Use validation transforms - less heavy aug, mostly resizing)
     val_ds = SyntheticCrabDataset(
-        background_files=bg_files,
+        hf_dataset=hf_dataset,
         crab_images=crab_images,
         num_samples=n_val,
-        crab_transform=None,
-        bg_transform=get_val_transforms(640, 640)
+        crab_transform=get_crab_transforms(),
+        crab_color_transform=get_crab_color_transforms(),
+        bg_transform=get_bg_transforms(640, 640),
+        bg_size=(640, 640)
     )
     generate_split(val_ds, args.output, 'val')
     
     # Test
     test_ds = SyntheticCrabDataset(
-        background_files=bg_files,
+        hf_dataset=hf_dataset,
         crab_images=crab_images,
         num_samples=n_test,
-        crab_transform=None,
-        bg_transform=get_val_transforms(640, 640)
+        crab_transform=get_crab_transforms(),
+        crab_color_transform=get_crab_color_transforms(),
+        bg_transform=get_bg_transforms(640, 640),
+        bg_size=(640, 640)
     )
     generate_split(test_ds, args.output, 'test')
     
