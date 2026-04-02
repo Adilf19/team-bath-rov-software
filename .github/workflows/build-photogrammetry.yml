@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "photogrammetry-backend/**"
+      - ".github/workflows/build-photogrammetry.yml"
 
 env:
   REGISTRY: ghcr.io
