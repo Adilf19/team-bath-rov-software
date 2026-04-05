@@ -11,3 +11,4 @@ packet-simulator/fake_videos/
 .netlify
 machine-learning/crab_detection/scripts/test_e2e.py
 /machine-learning/crab_detection/tests
+machine-learning/crab_detection/error.log
