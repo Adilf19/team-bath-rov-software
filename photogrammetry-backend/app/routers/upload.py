@@ -1,3 +1,5 @@
+import shutil
+
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 
 from app.config import settings
@@ -7,6 +9,8 @@ from app.services.job_manager import job_manager
 router = APIRouter()
 
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/tiff", "image/webp"}
+
+CHUNK_SIZE = 1024 * 1024  # 1MB
 
 
 @router.post("/upload")
@@ -35,11 +39,11 @@ async def upload_images(
 
     total_size = 0
     for f in files:
-        content = await f.read()
-        total_size += len(content)
         file_path = upload_dir / f.filename
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_bytes(content)
+        with open(file_path, "wb") as dest:
+            size = shutil.copyfileobj(f.file, dest, length=CHUNK_SIZE)
+        total_size += file_path.stat().st_size
 
     job_manager.update_job(job_id, status=JobStatus.PENDING)
 
