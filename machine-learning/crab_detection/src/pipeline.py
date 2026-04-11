@@ -21,9 +21,12 @@ class CrabPipeline:
         if model_type == 'yolov8':
             path = model_path if model_path else 'yolov8n.pt'
             self.detector = YOLOv8Detector(model_path=path)
+        if model_type == 'yolo':
+            path = model_path if model_path else 'YOLO.pt'
+            self.detector = YOLOv8Detector(model_path=path)
         elif model_type == 'rf_detr':
             # For RF-DETR we might use a repo name or local path
-            path = model_path if model_path else 'rfdetr-medium'
+            path = model_path if model_path else 'RFDETR.pth'
             self.detector = RFDETRDetector(model_name=path)
         else:
             raise ValueError(f"Unknown model type: {model_type}")
@@ -54,7 +57,9 @@ class CrabPipeline:
             
             # Overlay count
             cv2.putText(processed_frame, f"Green Crabs: {green_crab_count}", (20, 40), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 4)
+            cv2.putText(processed_frame, f"Green Crabs: {green_crab_count}", (20, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
             
         return processed_frame, green_crab_count, detections
 

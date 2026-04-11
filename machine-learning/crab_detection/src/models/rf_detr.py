@@ -31,6 +31,7 @@ class RFDETRDetector:
             self.model = RFDETRNano()
         else:
             self.model = RFDETRMedium() # Default to medium as requested
+        self.model.optimize_for_inference()
             
         # The model automatically handles device placement (CUDA if available)
 

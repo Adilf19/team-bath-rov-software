@@ -198,9 +198,35 @@ def parse_video_args(video_config):
         )
         return video_file_paths, feeds
 
-    for i, file in enumerate(os.listdir(video_file_dir)):
+    allowed_video_extensions = {
+        ".mp4",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".m4v",
+        ".webm",
+        ".ts",
+        ".mpeg",
+        ".mpg",
+    }
+
+    files = sorted(os.listdir(video_file_dir), key=str.lower)
+    feed_idx = 0
+    for file in files:
+        if file.startswith("."):
+            continue
+
         filepath = os.path.join(video_file_dir, file)
-        video_file_paths[i] = filepath
+        if not os.path.isfile(filepath):
+            continue
+
+        _, ext = os.path.splitext(file)
+        if ext.lower() not in allowed_video_extensions:
+            continue
+
+        video_file_paths[feed_idx] = filepath
+        print(f"Found video file for feed {feed_idx}: {filepath}")
+        feed_idx += 1
 
     return (video_file_paths, feeds)
 
