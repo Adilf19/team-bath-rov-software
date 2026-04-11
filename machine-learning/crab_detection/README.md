@@ -98,3 +98,4 @@ poetry run uvicorn api.main:app --reload
 Api docs are available at <local-ip>/docs
 You will need a .env file at the root of the crab_detection folder with `MODEL=YOLO`
 You can set MODEL = {YOLO, rf-detr, yolov8}, though from initial testing YOLO seems to work best.
+For YOLO you will need the weight, which should be in the repo by default, otherwise are available in teams.
