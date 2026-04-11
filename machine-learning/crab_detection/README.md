@@ -21,6 +21,7 @@ The pipeline is designed to be highly robust to underwater environments and is s
 │   ├── models/                 # Model wrappers (YOLOv8, RF-DETR)
 │   └── utils/                  # Augmentation (Albumentations), dataset classes, and helpers
 └── tests/                      # Unit tests for transforms, datasets, and logical helpers
+|__ api/                        # Python FastApi for querying for inference for external applications.
 ```
 
 ## Installation
@@ -35,7 +36,7 @@ Ensure you have Python 3.9+ installed and a capable GPU for training.
    ```
 3. Install the dependencies:
    ```bash
-   pip install -r requirements.txt
+   poetry install
    ```
 
 ## Usage
@@ -88,3 +89,12 @@ To run the tests, simply execute:
 ```bash
 python tests/run_tests.py
 ```
+
+## API
+To run the api locally:
+```bash
+poetry run uvicorn api.main:app --reload
+```
+Api docs are available at <local-ip>/docs
+You will need a .env file at the root of the crab_detection folder with `MODEL=YOLO`
+You can set MODEL = {YOLO, rf-detr, yolov8}, though from initial testing YOLO seems to work best.
