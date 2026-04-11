@@ -11,9 +11,8 @@ nav:
       - Roadmap: general/roadmap.md
   - Projects:
       - DB Writer: projects/db-writer/db-writer.md
-      - Preprocessor: projects/preprocessor/preprocessor.md
-      - Schema Registry: projects/schema-registry/schema-registry.md
       - Photogrammetry: projects/photogrammetry/photogrammetry.md
+      - Crab-Detection: projects/crab-detection/crab-detection.md
       - Pilot Operations Guide: projects/photogrammetry/pilot-operations-guide.md
       - UI: projects/ui/ui.md
   - ADRS:
