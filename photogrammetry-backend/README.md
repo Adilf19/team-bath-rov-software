@@ -1,6 +1,8 @@
 # Photogrammetry Backend
 
-FastAPI service for 3D coral reef reconstruction. Part of the Team Bath ROV MATE 2026 project. Takes uploaded images of coral gardens and produces 3D `.glb` models.
+FastAPI service for 3D coral reef reconstruction — **MATE 2026 Task 1.2** (Coral Garden Ridge Modelling). Takes uploaded images of coral gardens and produces 3D `.glb` models using COLMAP (sparse SfM) + OpenMVS (dense reconstruction).
+
+The competition flow: pilot measures length → judge gives true length → system scales the 3D model → estimates height. See the [Pilot Operations Guide](../../docs-site/docs/projects/photogrammetry/pilot-operations-guide.md) for the full procedure.
 
 ## Prerequisites
 
@@ -16,6 +18,14 @@ uvicorn app.main:app --reload --port 8100
 
 - API: `http://localhost:8100`
 - Interactive docs (Swagger): `http://localhost:8100/docs`
+
+### Docker (recommended)
+
+```bash
+docker compose -f docker-compose.photogrammetry.yml up
+```
+
+This runs the full COLMAP + OpenMVS pipeline inside a container with all dependencies pre-compiled.
 
 ### Configuration
 
@@ -35,13 +45,14 @@ All endpoints are prefixed with `/api`.
 | Route | Description |
 |---|---|
 | `GET /api/health` | Health check |
-| `POST /api/upload` | Upload images for a job |
-| `POST /api/photogrammetry` | Start photogrammetry processing |
+| `POST /api/jobs` | Create a new job |
 | `GET /api/jobs` | List all jobs |
-| `GET /api/jobs/{job_id}` | Get job status |
+| `GET /api/jobs/{job_id}` | Get job status and progress |
+| `POST /api/upload` | Upload images for a job |
+| `POST /api/photogrammetry/run` | Start COLMAP + OpenMVS pipeline |
 | `GET /api/jobs/{job_id}/model` | Download the generated `.glb` model |
-| `POST /api/scaling` | Set scale reference for a job |
-| `POST /api/manual-cad` | Upload a manual CAD model |
+| `POST /api/scaling/estimate` | Scale model with true length, estimate height |
+| `POST /api/manual-cad/generate` | Generate a manual CAD model (3 rectangular prisms with dimensions) |
 
 ## Architecture
 
@@ -49,4 +60,5 @@ The service is consumed by the [`team-bath-rov-secondary-ui`](https://github.com
 
 ## Further Reading
 
-See the detailed plan document: [`docs/photogrammetry-backend-plan.md`](docs/photogrammetry-backend-plan.md)
+- [Pilot Operations Guide](../../docs-site/docs/projects/photogrammetry/pilot-operations-guide.md) — Competition procedure and scoring
+- [Technical Documentation](../../docs-site/docs/projects/photogrammetry/photogrammetry.md) — Pipeline details, Docker setup, troubleshooting

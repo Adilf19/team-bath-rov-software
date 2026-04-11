@@ -11,8 +11,16 @@ def get_crab_transforms():
         A.RandomRotate90(p=0.5),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
-        A.Transpose(p=0.5),
-        A.Affine(scale=(0.8, 1.2), translate_percent=(0.0, 0.0625), rotate=(-45, 45), p=0.2),
+        A.Affine(scale=(0.8, 1.2), translate_percent=(0.0, 0.0625), rotate=(-180, 180), shear=(-20, 20), p=0.8, fit_output=True),
+    ])
+
+def get_crab_color_transforms():
+    """
+    Returns the Albumentations transform pipeline for crab color augmentation.
+    """
+    return A.Compose([
+        A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.8),
+        A.RGBShift(r_shift_limit=20, g_shift_limit=20, b_shift_limit=20, p=0.8),
     ])
 
 def get_bg_transforms(height=640, width=640):
@@ -22,23 +30,23 @@ def get_bg_transforms(height=640, width=640):
     """
     return A.Compose([
         A.OneOf([
-            A.GaussNoise(),
-        ], p=0.2),
+            A.GaussNoise(std_range=(0.012, 0.027), p=1.0),
+        ], p=0.05),
         A.OneOf([
             A.MotionBlur(p=0.2),
             A.MedianBlur(blur_limit=3, p=0.1),
             A.Blur(blur_limit=3, p=0.1),
-        ], p=0.2),
+        ], p=0.1),
         A.OneOf([
             A.ElasticTransform(p=0.3),
-        ], p=0.2),
+        ], p=0.1),
         A.OneOf([
             A.CLAHE(clip_limit=2),
             A.Sharpen(),
             A.Emboss(),
             A.RandomBrightnessContrast(),
-        ], p=0.3),
-        A.HueSaturationValue(p=0.3),
+        ], p=0.2),
+        A.HueSaturationValue(p=0.2),
         A.Resize(height, width),
     ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
 
@@ -67,12 +75,19 @@ def apply_copy_paste(background_img, object_img, paste_x=None, paste_y=None):
     bg_h, bg_w = background_img.shape[:2]
     obj_h, obj_w = object_img.shape[:2]
 
-    # Resize object if it's too big for background
-    if obj_h > bg_h or obj_w > bg_w:
-        scale = min(bg_h / obj_h, bg_w / obj_w) * 0.8
-        new_w = int(obj_w * scale)
-        new_h = int(obj_h * scale)
-        object_img = cv2.resize(object_img, (new_w, new_h))
+    # Resize object to ensure crabs aren't too large
+    max_scale = 0.35 # Max size relative to background
+    scale = 1.0
+    if obj_h > bg_h * max_scale or obj_w > bg_w * max_scale:
+        scale = min((bg_h * max_scale) / obj_h, (bg_w * max_scale) / obj_w)
+    
+    # Scale down a bit more randomly for variety
+    scale *= np.random.uniform(0.5, 1.0)
+    
+    if scale < 1.0:
+        new_w = max(1, int(obj_w * scale))
+        new_h = max(1, int(obj_h * scale))
+        object_img = cv2.resize(object_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
         obj_h, obj_w = object_img.shape[:2]
 
     # Allow pasting outside bounds (e.g. -50% to +100%)
@@ -124,18 +139,30 @@ def apply_copy_paste(background_img, object_img, paste_x=None, paste_y=None):
                 alpha_s * cropped_obj[:, :, c] +
                 alpha_l * bg_slice[:, :, c]
             )
+            
+        # Update background with blended slice
+        background_img[inter_y1:inter_y2, inter_x1:inter_x2] = bg_slice
+            
+        # Mathematically tightening the box to the non-transparent visible pixels
+        mask = (cropped_obj[:, :, 3] > 10).astype(np.uint8)
+        x, y, w, h = cv2.boundingRect(mask)
+        
+        if w == 0 or h == 0:
+            return background_img, [0, 0, 0, 0]
+            
+        vis_cx = inter_x1 + x + w / 2.0
+        vis_cy = inter_y1 + y + h / 2.0
+        vis_w = w
+        vis_h = h
     else:
         bg_slice[:] = cropped_obj
-
-    # Update background with blended slice
-    background_img[inter_y1:inter_y2, inter_x1:inter_x2] = bg_slice
-
-    # Calculate Visible Bounding Box (YOLO format: x_center, y_center, width, height, normalized)
-    # Based on INTERSECTION (visible part)
-    vis_w = inter_x2 - inter_x1
-    vis_h = inter_y2 - inter_y1
-    vis_cx = inter_x1 + vis_w / 2
-    vis_cy = inter_y1 + vis_h / 2
+        # Update background with blended slice
+        background_img[inter_y1:inter_y2, inter_x1:inter_x2] = bg_slice
+        
+        vis_w = inter_x2 - inter_x1
+        vis_h = inter_y2 - inter_y1
+        vis_cx = inter_x1 + vis_w / 2.0
+        vis_cy = inter_y1 + vis_h / 2.0
     
     # If the object is too occluded (e.g. < 20% visible), we might want to discard it or keep it.
     # For object detection, usually we keep it if recognizable.

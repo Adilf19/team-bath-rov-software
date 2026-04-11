@@ -9,21 +9,24 @@ class SyntheticCrabDataset(Dataset):
     A synthetic dataset that generates training images by pasting
     transformed crab images onto random backgrounds.
     """
-    def __init__(self, background_files, crab_images, num_samples=1000, crab_transform=None, bg_transform=None):
+    def __init__(self, hf_dataset, crab_images, num_samples=1000, crab_transform=None, crab_color_transform=None, bg_transform=None, bg_size=(640, 640)):
         """
         Args:
-            background_files (list): List of file paths to background images.
+            hf_dataset (IterableDataset): HuggingFace streaming dataset for backgrounds.
             crab_images (dict): Dictionary mapping class_id to a list of crab image paths/arrays.
                                 e.g., {0: ['path/to/jonah.jpg'], 1: ['path/to/green.jpg'], ...}
             num_samples (int): Number of synthetic images to generate per epoch.
             crab_transform (A.Compose): Transform pipeline for individual crabs.
             bg_transform (A.Compose): Transform pipeline for the full background image.
         """
-        self.background_files = background_files
+        self.hf_dataset = hf_dataset
+        self.bg_iterator = iter(self.hf_dataset)
         self.crab_images = crab_images
         self.num_samples = num_samples
         self.crab_transform = crab_transform
+        self.crab_color_transform = crab_color_transform
         self.bg_transform = bg_transform
+        self.bg_size = bg_size
         
         # Load crab images into memory if paths are provided
         self.loaded_crabs = {}
@@ -31,8 +34,16 @@ class SyntheticCrabDataset(Dataset):
             self.loaded_crabs[cls_id] = []
             for p in paths:
                 if isinstance(p, str):
-                    img = cv2.imread(p)
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    img = cv2.imread(p, cv2.IMREAD_UNCHANGED)
+                    if img is None: continue
+                    if len(img.shape) == 2:
+                        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGBA)
+                    elif img.shape[2] == 3:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                        alpha = np.full((img.shape[0], img.shape[1], 1), 255, dtype=np.uint8)
+                        img = np.concatenate([img, alpha], axis=2)
+                    elif img.shape[2] == 4:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
                     self.loaded_crabs[cls_id].append(img)
                 else:
                     self.loaded_crabs[cls_id].append(p)
@@ -41,13 +52,34 @@ class SyntheticCrabDataset(Dataset):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # 1. Select a random background
-        bg_path = np.random.choice(self.background_files)
-        background = cv2.imread(bg_path)
-        background = cv2.cvtColor(background, cv2.COLOR_BGR2RGB)
+        # 1. Select a random background from HF streaming dataset
+        try:
+            bg_data = next(self.bg_iterator)
+        except StopIteration:
+            self.bg_iterator = iter(self.hf_dataset)
+            bg_data = next(self.bg_iterator)
+            
+        background_pil = bg_data['image'].convert('RGB')
+        background = np.array(background_pil)
         
-        # 2. Select the number of crabs to paste (random 1-5)
-        num_crabs = np.random.randint(1, 6)
+        # Crop background to specified size
+        h, w = background.shape[:2]
+        crop_h, crop_w = self.bg_size
+        
+        if h < crop_h or w < crop_w:
+            scale = max(crop_h / h, crop_w / w)
+            new_w = int(w * scale) + 1
+            new_h = int(h * scale) + 1
+            background = cv2.resize(background, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+            h, w = background.shape[:2]
+            
+        y1 = np.random.randint(0, h - crop_h + 1) if h > crop_h else 0
+        x1 = np.random.randint(0, w - crop_w + 1) if w > crop_w else 0
+        background = background[y1:y1+crop_h, x1:x1+crop_w]
+        
+        # 2. Select the number of crabs to paste (random 0-5)
+        # 0 crabs simulates a background / negative image for reducing false positives
+        num_crabs = np.random.randint(0, 6)
         
         bboxes = []
         class_labels = []
@@ -97,6 +129,12 @@ class SyntheticCrabDataset(Dataset):
                 transformed_crab = self.crab_transform(image=crab_img)
                 crab_img = transformed_crab['image']
                 
+            if getattr(self, 'crab_color_transform', None) and crab_img.shape[2] == 4:
+                rgb = crab_img[:, :, :3]
+                alpha = crab_img[:, :, 3:]
+                transformed_color = self.crab_color_transform(image=rgb)
+                crab_img = np.concatenate([transformed_color['image'], alpha], axis=2)
+                
             # Attempt to paste object while ensuring minimum overlap
             placed = False
             for attempt in range(MAX_RETRIES):
@@ -104,6 +142,10 @@ class SyntheticCrabDataset(Dataset):
                 
                 temp_img, candidate_bbox = apply_copy_paste(current_img.copy(), crab_img)
                 
+                # Check if crab is completely out of frame or heavily cropped (< 2% of frame width/height)
+                if candidate_bbox[2] < 0.02 or candidate_bbox[3] < 0.02:
+                    continue
+                    
                 overlap_found = False
                 for existing_bbox in bboxes:
                     # check intersection > 10%
