@@ -3,15 +3,14 @@ import signal
 import sys
 import threading
 import time
-import cv2
 
 from back_pressure_queue import BackpressureQueue
+from filters.basic_filters import Filter
 from mpegts.mpegts_client import MPEGTSClient
 from mpegts.mpegts_server import MPEGTSServer
 
 from common.metrics.metrics_monitor import MetricsMonitor
 from common.network.network_type import NetworkEnum
-from filters.basic_filters import Filter
 
 
 class VideoProcessor:
@@ -34,7 +33,7 @@ class VideoProcessor:
             self.input_network_type,
             self.output_network_type,
             self.ws_relay_enabled,
-            self.ws_relay_base_port
+            self.ws_relay_base_port,
         ) = parse_network_args(network_config)
 
         self.running = False
@@ -131,7 +130,7 @@ class VideoProcessor:
                 frame_queue=frame_queue,
                 network_type=NetworkEnum(self.output_network_type),
                 ws_relay_enabled=self.ws_relay_enabled,
-                ws_relay_base_port=self.ws_relay_base_port
+                ws_relay_base_port=self.ws_relay_base_port,
             )
             self.servers[feed_id] = server
 
